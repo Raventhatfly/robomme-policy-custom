@@ -1,13 +1,13 @@
 import dataclasses
 import functools
 import logging
+import os
 import platform
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb
-import time
 
 from typing import Any
 import tqdm_loggable.auto as tqdm
@@ -72,17 +72,18 @@ def init_wandb(
         return
 
     ckpt_dir = config.checkpoint_dir
+    wandb_entity = os.getenv("WANDB_ENTITY") or None
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="must", project=config.project_name, entity=wandb_entity)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
-            entity="daiyp_umich",
+            entity=wandb_entity,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
@@ -454,6 +455,4 @@ def main(config: _config.TrainConfig, tentative_run: bool = False):
 
 
 if __name__ == "__main__":
-    main(_config.cli(), tentative_run=True)
-    time.sleep(20)
     main(_config.cli())

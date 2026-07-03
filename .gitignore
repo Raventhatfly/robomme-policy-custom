@@ -207,3 +207,23 @@ marimo/_lsp/
 __marimo__/
 
 *local.sh
+
+# RoboMME local runtime outputs
+logs/
+wandb/
+runs/
+
+# Large local data/checkpoint artifacts
+data/
+checkpoints/
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.pkl
+*.h5
+*.hdf5
+*.mp4
+*.npy
+*.npz
+*.tar.xz

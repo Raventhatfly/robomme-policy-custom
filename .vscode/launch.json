@@ -1,0 +1,68 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "RoboMME Rollout: foreground symbolic grounded oracle",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'MODEL_TYPE=symbolic_groundedSG_oracle PORT=8000 bash scripts/eval_foreground.sh'"
+    },
+    {
+      "name": "RoboMME Rollout: foreground perceptual framesamp modul",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'MODEL_TYPE=perceptual-framesamp-modul PORT=8000 bash scripts/eval_foreground.sh'"
+    },
+    {
+      "name": "RoboMME Rollout: foreground pi05 baseline",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'MODEL_TYPE=pi05_baseline PORT=8001 bash scripts/eval_foreground.sh'"
+    },
+    {
+      "name": "RoboMME Train: single GPU smoke",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'DATA_ROOT=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme CONFIG_NAME=pi05_baseline EXP_NAME=single_gpu_smoke GPU_ID=0 NUM_TRAIN_STEPS=2 BATCH_SIZE=1 WANDB_ENABLED=false bash scripts/train_single_gpu_smoke.sh'"
+    },
+    {
+      "name": "RoboMME Data: build preprocessed debug",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'DATA_ROOT=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme PREPROCESSED_DATA_PATH=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme/robomme_preprocessed_data_debug MAX_EPISODES=2 COMPUTE_NORM_STATS=true bash scripts/build_robomme_preprocessed.sh'"
+    },
+    {
+      "name": "RoboMME Data: build preprocessed full",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "conda run -n robomme-openpi bash -lc 'DATA_ROOT=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme PREPROCESSED_DATA_PATH=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme/robomme_preprocessed_data COMPUTE_NORM_STATS=true bash scripts/build_robomme_preprocessed.sh'"
+    },
+    {
+      "name": "RoboMME Train: submit 2 GPU SLURM",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "mkdir -p logs/slurm && DATA_ROOT=/n/netscratch/hankyang_lab/Lab/felix/dataset/robomme MME_VLA_TYPE=perceptual-framesamp-modul EXP_NAME=perceptual-framesamp-modul_2gpu sbatch slurm_scripts/train_2gpu_mme_vla.sbatch"
+    },
+    {
+      "name": "RoboMME Policy Server Only: perceptual framesamp modul",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "CUDA_VISIBLE_DEVICES=0 conda run -n robomme-openpi python scripts/serve_policy.py --seed=7 --port=8000 policy:checkpoint --policy.dir=runs/ckpts/mme_vla_suite/perceptual-framesamp-modul/79999 --policy.config=mme_vla_suite"
+    },
+    {
+      "name": "RoboMME Eval Client Only: perceptual framesamp modul",
+      "type": "node-terminal",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "command": "CUDA_VISIBLE_DEVICES=1 conda run -n robomme python examples/robomme/eval.py --args.model_seed=7 --args.port=8000 --args.policy_name=perceptual-framesamp-modul --args.model_ckpt_id=79999"
+    }
+  ]
+}
