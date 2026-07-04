@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:2
 #SBATCH --mem=160G
-#SBATCH --time=24:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --output=logs/slurm/%x-%j.out
 #SBATCH --error=logs/slurm/%x-%j.err
 
@@ -25,6 +25,8 @@ NUM_WORKERS=${NUM_WORKERS:-4}
 NUM_TRAIN_STEPS=${NUM_TRAIN_STEPS:-80000}
 SAVE_INTERVAL=${SAVE_INTERVAL:-10000}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
+RESUME=${RESUME:-false}
+OVERWRITE=${OVERWRITE:-false}
 POLICY_ENV=${POLICY_ENV:-robomme-openpi}
 POLICY_PYTHON=${POLICY_PYTHON:-}
 DEFAULT_POLICY_PYTHON=/n/holylabs/LABS/hankyang_lab/Lab/felix/.conda/envs/robomme-openpi/bin/python
@@ -77,6 +79,8 @@ echo "[slurm] dataset: ${DATASET_PATH}"
 echo "[slurm] model: ${MME_VLA_TYPE}"
 echo "[slurm] exp: ${EXP_NAME}"
 echo "[slurm] batch size: ${BATCH_SIZE}"
+echo "[slurm] resume: ${RESUME}"
+echo "[slurm] overwrite: ${OVERWRITE}"
 echo "[slurm] python: ${POLICY_PYTHON}"
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}
@@ -98,6 +102,14 @@ if [[ "${WANDB_ENABLED}" == "true" ]]; then
   TRAIN_ARGS+=(--wandb-enabled)
 else
   TRAIN_ARGS+=(--no-wandb-enabled)
+fi
+
+if [[ "${RESUME}" == "true" ]]; then
+  TRAIN_ARGS+=(--resume)
+fi
+
+if [[ "${OVERWRITE}" == "true" ]]; then
+  TRAIN_ARGS+=(--overwrite)
 fi
 
 ${POLICY_PYTHON} "${TRAIN_ARGS[@]}"

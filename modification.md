@@ -161,6 +161,7 @@ Features:
 - Uses netscratch dataset by default.
 - Uses timestamped experiment names by default.
 - Uses W&B by default: `WANDB_ENABLED=true`.
+- Supports `RESUME=true` and `OVERWRITE=true` for existing checkpoint directories.
 - Writes checkpoints under `runs/ckpts/mme_vla_suite`, which is symlinked to netscratch.
 - Uses the absolute `robomme-openpi` Python path if present.
 
@@ -219,6 +220,18 @@ Disable W&B for any run:
 
 ```bash
 WANDB_ENABLED=false sbatch slurm_scripts/train_2gpu_mme_vla.sbatch
+```
+
+Resume an interrupted run:
+
+```bash
+MME_VLA_TYPE=recurrent-ttt-expert \
+EXP_NAME=recurrent-ttt-expert_2gpu_YYYYMMDD_HHMMSS \
+BATCH_SIZE=16 \
+NUM_TRAIN_STEPS=80000 \
+SAVE_INTERVAL=10000 \
+RESUME=true \
+sbatch slurm_scripts/train_2gpu_mme_vla.sbatch
 ```
 
 ### `scripts/eval_foreground.sh`
@@ -282,6 +295,86 @@ bash scripts/eval_foreground.sh
 ```
 
 Note: `symbolic_groundedSG_oracle` maps to checkpoint directory `symbolic-grounded-subgoal`.
+
+### `scripts/eval_memory_checkpoint.sh`
+
+Convenience wrapper for evaluating an existing MME-VLA memory checkpoint in the foreground.
+
+Defaults:
+
+```bash
+MODEL_TYPE=recurrent-ttt-expert_2gpu_20260703_143622
+CKPT_ID=30000
+MODE=full
+ONLY_TASKS=BinFill
+EVAL_SAVE_DIR=/n/netscratch/hankyang_lab/Lab/felix/ckpts/robomme_policy_ckpt/evaluation_memory
+```
+
+Full eval of the current recurrent memory checkpoint:
+
+```bash
+bash scripts/eval_memory_checkpoint.sh
+```
+
+Smoke eval on one task:
+
+```bash
+MODE=smoke ONLY_TASKS=PickXtimes bash scripts/eval_memory_checkpoint.sh
+```
+
+Full eval:
+
+```bash
+MODE=full bash scripts/eval_memory_checkpoint.sh
+```
+
+Evaluate another checkpoint:
+
+```bash
+MODEL_TYPE=recurrent-ttt-expert_2gpu_20260703_143622 \
+CKPT_ID=20000 \
+bash scripts/eval_memory_checkpoint.sh
+```
+
+### `slurm_scripts/eval_memory_checkpoint.sbatch`
+
+SLURM version for evaluating an existing MME-VLA memory checkpoint. This is the preferred cluster entrypoint.
+
+Defaults:
+
+```bash
+MODEL_TYPE=recurrent-ttt-expert_2gpu_20260703_143622
+CKPT_ID=30000
+MODE=full
+ONLY_TASKS=BinFill
+EVAL_SAVE_DIR=/n/netscratch/hankyang_lab/Lab/felix/ckpts/robomme_policy_ckpt/evaluation_memory
+```
+
+Full eval of the current recurrent memory checkpoint:
+
+```bash
+sbatch slurm_scripts/eval_memory_checkpoint.sbatch
+```
+
+Smoke eval on one task:
+
+```bash
+MODE=smoke ONLY_TASKS=PickXtimes sbatch slurm_scripts/eval_memory_checkpoint.sbatch
+```
+
+Explicit full eval:
+
+```bash
+MODE=full sbatch slurm_scripts/eval_memory_checkpoint.sbatch
+```
+
+Evaluate another checkpoint:
+
+```bash
+MODEL_TYPE=recurrent-ttt-expert_2gpu_20260703_143622 \
+CKPT_ID=20000 \
+sbatch slurm_scripts/eval_memory_checkpoint.sbatch
+```
 
 ### `slurm_scripts/eval_mme_vla.sbatch`
 
@@ -387,4 +480,3 @@ NUM_TRAIN_STEPS=80000 \
 SAVE_INTERVAL=10000 \
 sbatch slurm_scripts/train_2gpu_mme_vla.sbatch
 ```
-
