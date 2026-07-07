@@ -345,6 +345,11 @@ def main(config: _config.TrainConfig, tentative_run: bool = False):
         overwrite=config.overwrite,
         resume=config.resume,
     )
+    if resuming and config.resum_ckpt_id is None:
+        latest_step = checkpoint_manager.latest_step()
+        config = dataclasses.replace(config, resum_ckpt_id=latest_step)
+        logging.info(f"Auto-selected checkpoint {latest_step} for resume.")
+
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
     init_history_config(config)
     history_config = get_history_config(config.model.history_config)

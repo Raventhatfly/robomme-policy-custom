@@ -10,7 +10,11 @@ The baseline code path was not intentionally overwritten. The original `pi05_bas
 scripts/finetune_pi05_baseline.sh
 ```
 
-The new SLURM training script described below is for `mme_vla_suite` memory variants. Use the baseline script or `scripts/train.py pi05_baseline` directly for baseline experiments.
+The MME-VLA SLURM training script described below is for memory variants. A separate pi0.5 baseline SLURM script is provided at:
+
+```bash
+slurm_scripts/train_pi05_baseline_80k.sbatch
+```
 
 ## Environment And Paths
 
@@ -232,6 +236,41 @@ NUM_TRAIN_STEPS=80000 \
 SAVE_INTERVAL=10000 \
 RESUME=true \
 sbatch slurm_scripts/train_2gpu_mme_vla.sbatch
+```
+
+### `slurm_scripts/train_pi05_baseline_80k.sbatch`
+
+Canonical 2-GPU SLURM training script for the pure pi0.5 baseline.
+
+Features:
+
+- Uses `scripts/train.py pi05_baseline`.
+- Uses netscratch dataset by default.
+- Uses timestamped experiment names by default.
+- Uses W&B by default: `WANDB_ENABLED=true`.
+- Writes checkpoints under `runs/ckpts/pi05_baseline`, which is symlinked to netscratch.
+- Uses the absolute `robomme-openpi` Python path if present.
+- Does not enable history or memory.
+
+Default command:
+
+```bash
+sbatch slurm_scripts/train_pi05_baseline_80k.sbatch
+```
+
+Equivalent explicit command:
+
+```bash
+BATCH_SIZE=32 \
+NUM_TRAIN_STEPS=80000 \
+SAVE_INTERVAL=10000 \
+sbatch slurm_scripts/train_pi05_baseline_80k.sbatch
+```
+
+Disable W&B:
+
+```bash
+WANDB_ENABLED=false sbatch slurm_scripts/train_pi05_baseline_80k.sbatch
 ```
 
 ### `scripts/eval_foreground.sh`

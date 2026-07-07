@@ -227,3 +227,6 @@ checkpoints/
 *.npy
 *.npz
 *.tar.xz
+
+# Other
+ckpts
