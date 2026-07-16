@@ -13,7 +13,11 @@ from openpi.shared import nnx_utils
 
 from mme_vla_suite.models.integration.history_observation import HistAugObservation
 from mme_vla_suite.models.integration.history_pi0 import HistoryPi0
-from mme_vla_suite.shared.mem_buffer import MemoryBuffer, MemoryBufferRecurrent
+from mme_vla_suite.shared.mem_buffer import (
+    MemoryBuffer,
+    MemoryBufferMovieChat,
+    MemoryBufferRecurrent,
+)
 
 class MME_VLA_Policy:
     def __init__(
@@ -61,6 +65,36 @@ class MME_VLA_Policy:
                 max_recur_steps=self.config.recurrent_memory.max_recur_steps,
                 max_video_steps=self.config.recurrent_memory.max_pretraj_steps,
                 prepare_buffer=True, vision_enc_fn=self._vision_encode,
+            )
+        elif self.config.representation_type == "moviechat_memory":
+            moviechat_vision_enc_fn = self._vision_encode
+            if self.config.moviechat_memory.get("online_encoder", None) == "fluxvla_siglip":
+                from mme_vla_suite.shared.fluxvla_siglip_encoder import FluxVLASigLIPEncoder
+
+                moviechat_vision_enc_fn = FluxVLASigLIPEncoder(
+                    self.config.moviechat_memory.online_encoder_checkpoint,
+                    dtype=self.config.moviechat_memory.get("online_encoder_dtype", "bf16"),
+                    frame_memory_tokens=self.config.moviechat_memory.get(
+                        "frame_memory_tokens", 32),
+                )
+            self.mem_buffer = MemoryBufferMovieChat(
+                num_views=self.config.num_views,
+                img_emb_dim=self.config.memory_feature.img.input_dim,
+                pos_emb_dim=self.config.memory_feature.pos.input_dim,
+                state_emb_dim=self.config.memory_feature.state.input_dim,
+                short_memory_size=self.config.moviechat_memory.short_memory_size,
+                short_memory_merge=self.config.moviechat_memory.short_memory_merge,
+                long_memory_size=self.config.moviechat_memory.long_memory_size,
+                high_relevance_keep_frames=self.config.moviechat_memory.get(
+                    "high_relevance_keep_frames", 3),
+                low_relevance_keep_frames=self.config.moviechat_memory.get(
+                    "low_relevance_keep_frames", 1),
+                relevance_threshold=self.config.moviechat_memory.get(
+                    "relevance_threshold", 0.25),
+                frame_memory_tokens=self.config.moviechat_memory.get(
+                    "frame_memory_tokens", 32),
+                prepare_buffer=True,
+                vision_enc_fn=moviechat_vision_enc_fn,
             )
         else:
             self.mem_buffer = MemoryBuffer(
@@ -112,6 +146,10 @@ class MME_VLA_Policy:
         if self.mem_buffer is None:
             return
         images = obs["images"]
+        if self.config is not None and self.config.representation_type == "moviechat_memory":
+            wrist_images = obs.get("wrist_images")
+            if wrist_images is not None:
+                images = np.concatenate([images, wrist_images], axis=1)
         states = obs["state"]
         if obs.get("exec_start_idx", 0) > 0: # has video
             self.exec_start_idx = obs["exec_start_idx"]
@@ -153,6 +191,19 @@ class MME_VLA_Policy:
                     self.mem_buffer.prepare_frame_sampling(
                         self.step_idx, token_budget, token_per_image, history_feats_gather_fn)
             
+            inputs["static_image_emb"] = static_image_emb
+            inputs["static_pos_emb"] = static_pos_emb
+            inputs["static_state_emb"] = self._normalize_state(static_state_emb)
+            inputs["static_mask"] = static_mask
+        elif self.config.representation_type == "moviechat_memory":
+            history_feats_gather_fn = self.mem_buffer.default_history_feats_gather_fn
+            token_budget = self.config.budget
+            token_per_image = self.config.token_per_image
+            static_image_emb, static_pos_emb, static_state_emb, static_mask = \
+                self.mem_buffer.prepare_moviechat_memory(
+                    self.step_idx, token_budget, token_per_image,
+                    history_feats_gather_fn)
+
             inputs["static_image_emb"] = static_image_emb
             inputs["static_pos_emb"] = static_pos_emb
             inputs["static_state_emb"] = self._normalize_state(static_state_emb)

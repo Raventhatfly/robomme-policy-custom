@@ -7,10 +7,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import random
 import re
+from collections import OrderedDict
 
 from openpi.training import config as _config
 from openpi.training.data_loader import Dataset
-from mme_vla_suite.shared.mem_buffer import MemoryBuffer, MemoryBufferRecurrent
+from mme_vla_suite.shared.mem_buffer import (
+    MemoryBuffer,
+    MemoryBufferMovieChat,
+    MemoryBufferRecurrent,
+)
 import pickle
 
 random.seed(0)
@@ -54,6 +59,11 @@ class RoboMMEDataset(Dataset):
         self.action_horizon = action_horizon
         self.dataset = SampleDataset(dataset_path)
         self.feature_dir = Path(self.dataset.dataset_path) / "features"
+        self._moviechat_sidecar_cache = OrderedDict()
+        self._moviechat_sidecar_cache_size = 8
+        self._moviechat_episode_index = None
+        self._moviechat_sidecar_root = None
+        self._moviechat_sidecar_format = "npz"
 
         if self.history_config is not None:
             self.img_emb_dim = self.history_config.memory_feature.img.input_dim
@@ -70,6 +80,20 @@ class RoboMMEDataset(Dataset):
                     state_emb_dim=self.state_emb_dim,
                     token_drop_stride=self.streaming_obs_horizon // 2,
                 )
+            elif self.history_config.representation_type == "moviechat_memory":
+                if self._use_moviechat_sidecar:
+                    self.mem_buffer = None
+                    self._setup_moviechat_sidecar()
+                else:
+                    self.mem_buffer = MemoryBufferMovieChat(
+                        num_views=self.num_views,
+                        img_emb_dim=self.img_emb_dim,
+                        pos_emb_dim=self.pos_emb_dim,
+                        state_emb_dim=self.state_emb_dim,
+                        short_memory_size=self.history_config.moviechat_memory.short_memory_size,
+                        short_memory_merge=self.history_config.moviechat_memory.short_memory_merge,
+                        long_memory_size=self.history_config.moviechat_memory.long_memory_size,
+                    )
             elif self.history_config.representation_type == "recurrent":
                 self.mem_buffer = MemoryBufferRecurrent(
                     num_views=self.num_views,
@@ -91,6 +115,83 @@ class RoboMMEDataset(Dataset):
         if not compute_norm_stats:
             self.state_norm_stats = data_config.norm_stats['state']
             self.use_quantiles = data_config.use_quantile_norm
+
+    @property
+    def _use_moviechat_sidecar(self):
+        if self.history_config is None:
+            return False
+        if self.history_config.representation_type != "moviechat_memory":
+            return False
+        return self.history_config.moviechat_memory.get("source", "dynamic") == "sidecar"
+
+    def _setup_moviechat_sidecar(self):
+        sidecar_root = self.history_config.moviechat_memory.sidecar_root
+        index_path = self.history_config.moviechat_memory.index_path
+        self._moviechat_sidecar_cache_size = int(
+            self.history_config.moviechat_memory.get("sidecar_cache_size", 8)
+        )
+        self._moviechat_sidecar_root = Path(sidecar_root)
+        self._moviechat_sidecar_format = self.history_config.moviechat_memory.get(
+            "sidecar_format", "npz"
+        )
+        with open(index_path, "r") as f:
+            index = json.load(f)
+        self._moviechat_episode_index = index["episodes"]
+
+    def _moviechat_sidecar_path(self, epis_idx: int) -> Path:
+        episode = self._moviechat_episode_index[epis_idx]
+        raw_stem = Path(episode["path"]).with_suffix("").name
+        episode_id = int(episode["episode_id"])
+        if self._moviechat_sidecar_format == "npy_mmap":
+            return self._moviechat_sidecar_root / raw_stem / f"episode_{episode_id}"
+        return self._moviechat_sidecar_root / raw_stem / f"episode_{episode_id}.npz"
+
+    def _load_moviechat_sidecar(self, epis_idx: int):
+        cached = self._moviechat_sidecar_cache.get(epis_idx)
+        if cached is not None:
+            self._moviechat_sidecar_cache.move_to_end(epis_idx)
+            return cached
+
+        sidecar_path = self._moviechat_sidecar_path(epis_idx)
+        if self._moviechat_sidecar_format == "npy_mmap":
+            tokens_path = sidecar_path / "memory_tokens.npy"
+            masks_path = sidecar_path / "memory_masks.npy"
+            frame_indices_path = sidecar_path / "frame_indices.npy"
+            if not tokens_path.exists() or not masks_path.exists() or not frame_indices_path.exists():
+                raise FileNotFoundError(f"MovieChat mmap sidecar not found: {sidecar_path}")
+            sidecar = {
+                "tokens": np.load(tokens_path, mmap_mode="r"),
+                "masks": np.load(masks_path, mmap_mode="r"),
+                "frame_indices": np.load(frame_indices_path, mmap_mode="r"),
+            }
+        else:
+            if not sidecar_path.exists():
+                raise FileNotFoundError(f"MovieChat memory sidecar not found: {sidecar_path}")
+            with np.load(sidecar_path, allow_pickle=False) as data:
+                sidecar = {
+                    "tokens": data["memory_tokens"].astype(np.float32),
+                    "masks": data["memory_masks"].astype(np.bool_),
+                    "frame_indices": data["frame_indices"].astype(np.int64),
+                }
+
+        if self._moviechat_sidecar_cache_size > 0:
+            self._moviechat_sidecar_cache[epis_idx] = sidecar
+            self._moviechat_sidecar_cache.move_to_end(epis_idx)
+            while len(self._moviechat_sidecar_cache) > self._moviechat_sidecar_cache_size:
+                self._moviechat_sidecar_cache.popitem(last=False)
+        return sidecar
+
+    def prepare_moviechat_sidecar(self, epis_idx: int, step_idx: int):
+        sidecar = self._load_moviechat_sidecar(epis_idx)
+        matches = np.flatnonzero(sidecar["frame_indices"] == step_idx)
+        sidecar_idx = int(matches[0]) if len(matches) else int(step_idx)
+        sidecar_idx = int(np.clip(sidecar_idx, 0, len(sidecar["tokens"]) - 1))
+
+        tokens = np.asarray(sidecar["tokens"][sidecar_idx], dtype=np.float32)
+        masks = np.asarray(sidecar["masks"][sidecar_idx], dtype=np.bool_)
+        pos_emb = np.zeros((tokens.shape[0], self.pos_emb_dim), dtype=np.float32)
+        state_emb = np.zeros((tokens.shape[0], self.state_emb_dim), dtype=np.float32)
+        return tokens, pos_emb, state_emb, masks
         
     def _gather_history_feat(self, indices_to_load: list[int], epis_idx: int):
         history_feats = {}
@@ -135,6 +236,17 @@ class RoboMMEDataset(Dataset):
 
         return self.mem_buffer.prepare_frame_sampling(
             step_idx, token_budget, token_per_image, self._gather_history_feat, 
+            epis_idx=epis_idx)
+
+    def prepare_moviechat_memory(self, epis_idx, step_idx):
+        if self._use_moviechat_sidecar:
+            return self.prepare_moviechat_sidecar(epis_idx, step_idx)
+
+        token_per_image = self.history_config.token_per_image
+        token_budget = self.history_config.budget
+
+        return self.mem_buffer.prepare_moviechat_memory(
+            step_idx, token_budget, token_per_image, self._gather_history_feat,
             epis_idx=epis_idx)
 
 
@@ -231,6 +343,19 @@ class RoboMMEDataset(Dataset):
                         static_mask, # slow >=64, mid >=16,fast >=4
                     ) = self.prepare_frame_sampling(epis_idx, step_idx)
                 
+                data["static_image_emb"] = static_img_emb
+                data["static_pos_emb"] = static_pos_emb
+                data["static_state_emb"] = self._normalize_state(static_state_emb)
+                data["static_mask"] = static_mask
+
+            elif self.history_config.representation_type == "moviechat_memory":
+                (
+                    static_img_emb,
+                    static_pos_emb,
+                    static_state_emb,
+                    static_mask,
+                ) = self.prepare_moviechat_memory(epis_idx, step_idx)
+
                 data["static_image_emb"] = static_img_emb
                 data["static_pos_emb"] = static_pos_emb
                 data["static_state_emb"] = self._normalize_state(static_state_emb)

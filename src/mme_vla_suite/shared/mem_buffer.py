@@ -483,3 +483,225 @@ class MemoryBufferRecurrent(MemoryBuffer):
             images,
             fps=2,
         )
+
+
+class MemoryBufferMovieChat(MemoryBuffer):
+    """MovieChat-style causal short/long memory for online rollout.
+
+    This mirrors FluxVLA's MovieChatMemory update/read behavior, but keeps the
+    implementation in numpy/JAX-land so the OpenPI policy server does not need
+    to import FluxVLA. The model-facing output is the same as the offline
+    sidecar: a fixed `(budget, img_emb_dim)` static memory bank.
+    """
+
+    def __init__(
+        self,
+        short_memory_size: int = 18,
+        short_memory_merge: int = 2,
+        long_memory_size: int = 30,
+        high_relevance_keep_frames: int = 3,
+        low_relevance_keep_frames: int = 1,
+        relevance_threshold: float = 0.25,
+        frame_memory_tokens: int = 32,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.short_memory_size = short_memory_size
+        self.short_memory_merge = short_memory_merge
+        self.long_memory_size = None if long_memory_size in (None, 0) else long_memory_size
+        self.high_relevance_keep_frames = high_relevance_keep_frames
+        self.low_relevance_keep_frames = low_relevance_keep_frames
+        self.relevance_threshold = relevance_threshold
+        self.frame_memory_tokens = frame_memory_tokens
+        self._reset_moviechat_state()
+
+    def _reset_moviechat_state(self):
+        self.short_memory = None
+        self.short_mask = None
+        self.short_weights = None
+        self.recent_short_memory = None
+        self.recent_short_mask = None
+        self.long_memory = None
+        self.long_mask = None
+        self.long_weights = None
+
+    def clear(self):
+        super().clear()
+        self._reset_moviechat_state()
+
+    @staticmethod
+    def _append(old, new, axis=1):
+        if old is None:
+            return new
+        if new is None or new.shape[axis] == 0:
+            return old
+        return np.concatenate([old, new], axis=axis)
+
+    @staticmethod
+    def _frame_weights(mask):
+        return mask.sum(axis=-1, keepdims=True).astype(np.float32)[..., None]
+
+    def _most_similar_adjacent_index(self, tokens, mask):
+        if tokens.shape[1] <= 1:
+            return 0
+        scores = []
+        for i in range(tokens.shape[1] - 1):
+            left = tokens[:, i]
+            right = tokens[:, i + 1]
+            pair_mask = mask[:, i, :, None] & mask[:, i + 1, None, :]
+            denom = np.maximum(pair_mask.sum(axis=(-1, -2)), 1.0)
+            sim = np.matmul(left, np.swapaxes(right, -1, -2))
+            per_batch = (sim * pair_mask.astype(np.float32)).sum(axis=(-1, -2)) / denom
+            scores.append(float(per_batch.mean()))
+        return int(np.argmax(np.asarray(scores)))
+
+    @staticmethod
+    def _merge_adjacent(tokens, mask, weights, merge_idx):
+        left_weight = weights[:, merge_idx]
+        right_weight = weights[:, merge_idx + 1]
+        denom = np.maximum(left_weight + right_weight, 1.0)
+        merged = (tokens[:, merge_idx] * left_weight + tokens[:, merge_idx + 1] * right_weight) / denom
+        merged_mask = mask[:, merge_idx] | mask[:, merge_idx + 1]
+        merged_weight = left_weight + right_weight
+
+        tokens = np.concatenate(
+            [tokens[:, :merge_idx], merged[:, None], tokens[:, merge_idx + 2:]], axis=1)
+        mask = np.concatenate(
+            [mask[:, :merge_idx], merged_mask[:, None], mask[:, merge_idx + 2:]], axis=1)
+        weights = np.concatenate(
+            [weights[:, :merge_idx], merged_weight[:, None], weights[:, merge_idx + 2:]], axis=1)
+        return tokens, mask, weights
+
+    def _consolidate(self, tokens, mask, weights):
+        # Training sidecar generation used clip_relevance=False, so FluxVLA falls
+        # back to the threshold and keeps the high-relevance target.
+        target_frames = (
+            self.high_relevance_keep_frames
+            if self.relevance_threshold >= self.relevance_threshold
+            else self.low_relevance_keep_frames
+        )
+        target_frames = min(target_frames, tokens.shape[1])
+        while tokens.shape[1] > target_frames:
+            merge_idx = self._most_similar_adjacent_index(tokens, mask)
+            tokens, mask, weights = self._merge_adjacent(tokens, mask, weights, merge_idx)
+        return tokens, mask, weights
+
+    def _update_moviechat(self, frame_tokens):
+        frame_tokens = np.asarray(frame_tokens, dtype=np.float32)
+        if frame_tokens.ndim != 3:
+            raise ValueError(f"frame_tokens must be (batch, num_tokens, dim), got {frame_tokens.shape}")
+        if frame_tokens.shape[-1] != self.img_emb_dim:
+            raise ValueError(
+                f"MovieChat online encoder dim {frame_tokens.shape[-1]} does not match "
+                f"training sidecar dim {self.img_emb_dim}."
+            )
+        frame_tokens = frame_tokens[:, None]
+        frame_mask = np.ones(frame_tokens.shape[:-1], dtype=np.bool_)
+        frame_weights = self._frame_weights(frame_mask)
+
+        self.short_memory = self._append(self.short_memory, frame_tokens, axis=1)
+        self.short_mask = self._append(self.short_mask, frame_mask, axis=1)
+        self.short_weights = self._append(self.short_weights, frame_weights, axis=1)
+
+        while self.short_memory is not None and self.short_memory.shape[1] >= self.short_memory_size:
+            segment = self.short_memory[:, :self.short_memory_size]
+            segment_mask = self.short_mask[:, :self.short_memory_size]
+            segment_weights = self.short_weights[:, :self.short_memory_size]
+            remaining = self.short_memory[:, self.short_memory_size:]
+            remaining_mask = self.short_mask[:, self.short_memory_size:]
+            remaining_weights = self.short_weights[:, self.short_memory_size:]
+
+            self.recent_short_memory = segment
+            self.recent_short_mask = segment_mask
+            compressed, compressed_mask, compressed_weights = self._consolidate(
+                segment, segment_mask, segment_weights)
+
+            self.long_memory = self._append(self.long_memory, compressed, axis=1)
+            self.long_mask = self._append(self.long_mask, compressed_mask, axis=1)
+            self.long_weights = self._append(self.long_weights, compressed_weights, axis=1)
+            if self.long_memory_size is not None and self.long_memory.shape[1] > self.long_memory_size:
+                keep_from = self.long_memory.shape[1] - self.long_memory_size
+                self.long_memory = self.long_memory[:, keep_from:]
+                self.long_mask = self.long_mask[:, keep_from:]
+                self.long_weights = self.long_weights[:, keep_from:]
+
+            self.short_memory = remaining if remaining.shape[1] else None
+            self.short_mask = remaining_mask if remaining_mask.shape[1] else None
+            self.short_weights = remaining_weights if remaining_weights.shape[1] else None
+
+    def add_buffer(
+        self,
+        images,
+        states,
+        step_idx_list: list[int],
+    ):
+        assert self.vision_enc is not None, "encode is not initialized"
+
+        t, v, _, _, _ = images.shape
+        if getattr(self.vision_enc, "expects_uint8_images", False):
+            pooled_emb = self.vision_enc(images)
+        else:
+            image_jnp = jnp.array(images.astype(np.float32) / 255.0 * 2.0 - 1.0)
+            image_jnp = einops.rearrange(image_jnp, "t v h w c -> (t v) h w c")
+            image_jnp = image_tools.resize_with_pad(image_jnp, 224, 224)
+            image_jnp = einops.rearrange(image_jnp, "(t v) h w c -> t v h w c", t=t, v=v)
+            output_emb = self.vision_enc(image_jnp)
+            pooled_emb = jax.device_get(pool_tokens_to_size(output_emb, self.frame_memory_tokens))
+
+        for i, step_idx in enumerate(step_idx_list):
+            frame_tokens = pooled_emb[i]
+            self._update_moviechat(frame_tokens)
+            self._history_feats[step_idx] = {"state_emb": states[i]}
+
+    def _read_fixed_memory(self, token_budget):
+        short_tokens = (
+            self.recent_short_memory
+            if self.recent_short_memory is not None else self.short_memory)
+        short_mask = (
+            self.recent_short_mask
+            if self.recent_short_mask is not None else self.short_mask)
+        tokens = self._append(self.long_memory, short_tokens, axis=1)
+        mask = self._append(self.long_mask, short_mask, axis=1)
+
+        img_emb = np.zeros((token_budget, self.img_emb_dim), dtype=np.float32)
+        pos_emb = np.zeros((token_budget, self.pos_emb_dim), dtype=np.float32)
+        state_emb = np.zeros((token_budget, self.state_emb_dim), dtype=np.float32)
+        out_mask = np.zeros((token_budget,), dtype=np.bool_)
+        if tokens is None:
+            return img_emb, pos_emb, state_emb, out_mask
+
+        tokens = tokens.reshape(-1, tokens.shape[-1]).astype(np.float32)
+        mask = mask.reshape(-1).astype(np.bool_)
+        if tokens.shape[0] > token_budget:
+            tokens = self._adaptive_avg_pool_tokens(tokens, token_budget)
+            mask = np.ones((token_budget,), dtype=np.bool_)
+
+        keep = min(tokens.shape[0], token_budget)
+        if keep > 0:
+            img_emb[:keep] = tokens[-keep:]
+            out_mask[:keep] = mask[-keep:]
+        return img_emb, pos_emb, state_emb, out_mask
+
+    @staticmethod
+    def _adaptive_avg_pool_tokens(tokens, target_size):
+        source_size = tokens.shape[0]
+        pooled = np.zeros((target_size, tokens.shape[1]), dtype=np.float32)
+        for i in range(target_size):
+            start = int(np.floor(i * source_size / target_size))
+            end = int(np.ceil((i + 1) * source_size / target_size))
+            end = max(end, start + 1)
+            pooled[i] = tokens[start:end].mean(axis=0)
+        return pooled
+
+    def prepare_moviechat_memory(
+        self,
+        step_idx,
+        token_budget,
+        token_per_image,
+        history_feats_gather_fn,
+        *args,
+        **kwargs,
+    ):
+        del step_idx, token_per_image, history_feats_gather_fn, args, kwargs
+        return self._read_fixed_memory(token_budget)

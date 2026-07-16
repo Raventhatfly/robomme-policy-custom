@@ -1,0 +1,38 @@
+budget: 128
+num_views: 1
+token_per_image: 128
+streaming_obs_horizon: 16
+pool_type: mean
+use_pos_emb: false
+use_state_emb: false
+memory_feature:
+  img:
+    net: identity
+    input_dim: 1152
+  pos:
+    input_dim: 768
+    hidden_dim: 768
+  state:
+    input_dim: 8
+    hidden_dim: 512
+integration_type: modulation
+memory_token_dim: 1024
+representation_type: moviechat_memory
+moviechat_memory:
+  source: sidecar
+  sidecar_format: npz
+  sidecar_root: /n/netscratch/hankyang_lab/Lab/felix/dataset/robomme/robomme_data_h5/memory/siglip_moviechat_mme_v1
+  index_path: /n/netscratch/hankyang_lab/Lab/felix/dataset/robomme/robomme_data_h5/fluxvla_hdf5_index.json
+  sidecar_cache_size: 4
+  frame_memory_tokens: 32
+  short_memory_size: 18
+  short_memory_merge: 2
+  high_relevance_keep_frames: 3
+  low_relevance_keep_frames: 1
+  relevance_threshold: 0.25
+  long_memory_size: null
+  online_encoder: fluxvla_siglip
+  online_encoder_checkpoint: /n/netscratch/hankyang_lab/Lab/felix/ckpts/fluxvla/pi0_base/model.safetensors
+  online_encoder_dtype: bf16
+perceptual_memory:
+  type: moviechat_sidecar

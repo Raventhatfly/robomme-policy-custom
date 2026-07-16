@@ -39,15 +39,21 @@ SUBGOAL_TYPES = ("simple_subgoal", "grounded_subgoal")
 
 
 
-def pack_buffer(image_buffer, state_buffer, exec_start_idx=0):
+def pack_buffer(image_buffer, state_buffer, exec_start_idx=0, wrist_image_buffer=None):
     image_output = np.stack(image_buffer, axis=0).astype(np.uint8)[:, None]
+    wrist_image_output = None
+    if wrist_image_buffer is not None:
+        wrist_image_output = np.stack(wrist_image_buffer, axis=0).astype(np.uint8)[:, None]
     state_output = np.stack(state_buffer, axis=0).astype(np.float32)
-    return {
+    output = {
         "images": image_output,
         "state": state_output,
         "add_buffer": True,
         "exec_start_idx": exec_start_idx,
     }
+    if wrist_image_output is not None:
+        output["wrist_images"] = wrist_image_output
+    return output
     
 def check_args(args):
     assert args.subgoal_type in ["simple_subgoal", "grounded_subgoal", None] and args.obs_horizon == 16

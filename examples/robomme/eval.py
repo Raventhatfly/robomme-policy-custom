@@ -197,6 +197,7 @@ class EpisodeEvaluator:
                 state.image_buffer,
                 state.state_buffer,
                 state.exec_start_idx,
+                wrist_image_buffer=state.wrist_image_buffer,
             ))
             while not resp.get("add_buffer_finished", False):
                 time.sleep(0.1)

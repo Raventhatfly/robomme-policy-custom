@@ -121,7 +121,7 @@ class HistoryPi0Config(Pi0Config):
                             [batch_size, self.max_token_len], bool
                         ),
                     )
-                elif self.history_config.representation_type == "perceptual":
+                elif self.history_config.representation_type in ["perceptual", "moviechat_memory"]:
                     observation_spec = HistAugObservation.from_base_obs(
                         base_obs_spec,
                         static_image_emb=jax.ShapeDtypeStruct(
@@ -249,9 +249,14 @@ class HistoryPi0(BaseModel):
             self.integration_type = config.history_config.integration_type
             self.representation_type = config.history_config.representation_type
             assert self.integration_type in ["context", "modulation", "expert"]
-            assert self.representation_type in ["perceptual", "recurrent", "symbolic"]
+            assert self.representation_type in [
+                "perceptual",
+                "recurrent",
+                "symbolic",
+                "moviechat_memory",
+            ]
 
-            if self.representation_type == "perceptual":
+            if self.representation_type in ["perceptual", "moviechat_memory"]:
                 from mme_vla_suite.models.representation.percep_mem import (
                     PerceptualMemory,
                 )
@@ -285,6 +290,8 @@ class HistoryPi0(BaseModel):
             )
             if self.representation_type == "perceptual":
                 print(f"Perceptual Memory using {self.history_config.perceptual_memory.type} type\n")
+            elif self.representation_type == "moviechat_memory":
+                print("MovieChat Memory using causal short/long frame compression\n")
             elif self.representation_type == "recurrent":
                 print(f"Recurrent Memory using {self.history_config.recurrent_memory.type} type\n")
             else:
@@ -393,7 +400,7 @@ class HistoryPi0(BaseModel):
 
     @at.typecheck
     def embed_memory(self, obs: HistAugObservation):
-        if self.representation_type == "perceptual":
+        if self.representation_type in ["perceptual", "moviechat_memory"]:
             tokens, _, stats = self.mem_encoder(
                 obs.static_image_emb, obs.static_pos_emb, obs.static_state_emb
             )

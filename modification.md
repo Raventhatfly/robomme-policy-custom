@@ -467,6 +467,59 @@ EXTRA_EVAL_ARGS='--args.use-oracle --args.subgoal-type=grounded_subgoal --args.o
 sbatch slurm_scripts/eval_mme_vla.sbatch
 ```
 
+### MovieChat Memory
+
+Added offline-sidecar and online-rollout support for `moviechat-memory-modul`.
+
+Important source details:
+
+- The 1152-d visual memory tokens are FluxVLA-compatible SigLIP tokens.
+- The architecture is HuggingFace/Transformers `SiglipVisionModel`, not a custom FluxVLA vision model.
+- FluxVLA wraps it as `SigLIPViTBackbone` and loads weights from FluxVLA `pi0_base/model.safetensors`.
+- Online rollout now loads those same vision weights directly through `safetensors`; it does not import or modify FluxVLA.
+
+Main files:
+
+```bash
+src/mme_vla_suite/shared/fluxvla_siglip_encoder.py
+src/mme_vla_suite/shared/mem_buffer.py
+src/mme_vla_suite/policies/policy.py
+src/mme_vla_suite/models/config/robomme/moviechat-memory-modul.yaml
+slurm_scripts/train_moviechat_memory_80k.sbatch
+slurm_scripts/eval_moviechat_memory_80k.sbatch
+```
+
+The online encoder checkpoint path is:
+
+```bash
+/n/netscratch/hankyang_lab/Lab/felix/ckpts/fluxvla/pi0_base/model.safetensors
+```
+
+MovieChat memory training:
+
+```bash
+sbatch slurm_scripts/train_moviechat_memory_80k.sbatch
+```
+
+MovieChat memory 80k eval:
+
+```bash
+sbatch slurm_scripts/eval_moviechat_memory_80k.sbatch
+```
+
+MovieChat memory as context tokens:
+
+```bash
+sbatch slurm_scripts/train_moviechat_memory_context_80k.sbatch
+```
+
+After training, evaluate the timestamped checkpoint:
+
+```bash
+MODEL_TYPE=moviechat-memory-context_2gpu_80k_YYYYMMDD_HHMMSS \
+sbatch slurm_scripts/eval_moviechat_memory_context_80k.sbatch
+```
+
 ## Runtime Directories
 
 These directories may exist locally after running jobs:

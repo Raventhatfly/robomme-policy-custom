@@ -363,12 +363,15 @@ def main(config: _config.TrainConfig, tentative_run: bool = False):
     data_config = config.data.create(config.assets_dirs, config.model)
     logging.info(f"data_config: {data_config}")
 
+    train_shuffle = os.getenv("ROBOMME_SHUFFLE", "true").lower() in ("1", "true", "yes", "on")
+    logging.info(f"ROBOMME_SHUFFLE={train_shuffle}")
+
     data_loader = _data_loader.create_data_loader(
         config.dataset_path,
         data_config,
         history_config=config.model.history_config,
         sharding=data_sharding,
-        shuffle=True,
+        shuffle=train_shuffle,
         action_horizon=config.model.action_horizon,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
